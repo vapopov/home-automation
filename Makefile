@@ -5,7 +5,7 @@ build:
 
 .PHONY: send
 send:
-	rsync -a ./ pi@192.168.3.121:/home/pi/hmac
+	rsync -a ./ pi@192.168.8.105:/home/pi/hmac
 
 
 

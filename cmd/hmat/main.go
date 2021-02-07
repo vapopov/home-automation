@@ -82,65 +82,48 @@ func main() {
 	}
 
 	fmt.Println("Sample Subscriber Started")
-	
-	if token := client.Subscribe("zigbee2mqtt/0x00124b000cc8e2ff", 0, func(c mqtt.Client, msg mqtt.Message) {
-		b := new(Button)
-		if err := json.Unmarshal(msg.Payload(), b); err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		cf := can.CANFrame{}
-		cf.SetAddr(0x200)
-		cf.Len = uint32(8)
-
-		switch b.Action {
-		case "button_1_click":
-			cf.Data = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
-			if err := bus.Write(&cf); err != nil {
-				fmt.Println(err)
-			}
-			regChan1 <- RegChange{
-				Mask: 0xff,
-				On:   true,
-			}
-			regChan2 <- RegChange{
-				Mask: 0xff,
-				On:   true,
-			}
-
-		case "button_2_click":
-			cf.Data = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
-			if err := bus.Write(&cf); err != nil {
-				fmt.Println(err)
-			}
-			regChan1 <- RegChange{
-				Mask: 0xff,
-				On:   false,
-			}
-			regChan2  <- RegChange{
-				Mask: 0xff,
-				On:   false,
-			}
-
-		case "button_3_click":
-			cf.Data = [8]byte{0, 0, 0, 0, 0, 0, 0, 3}
-			if err := bus.Write(&cf); err != nil {
-				fmt.Println(err)
-			}
-		case "button_4_click":
-			cf.Data = [8]byte{0, 0, 0, 0, 0, 0, 0, 0}
-			if err := bus.Write(&cf); err != nil {
-				fmt.Println(err)
-			}
-		}
-	}); token.Wait() && token.Error() != nil {
-		fmt.Println(token.Error())
-		os.Exit(1)
-	}
 
 	// Aquara button hardcoded behaviour.
 	var leftOn, rightOn bool
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				cf := can.CANFrame{}
+				if err := bus.Read(&cf); err == nil {
+					if cf.ID == 0x102 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1 {
+						send := `{"state": "on"}`
+						if leftOn {
+							send = `{"state": "off"}`
+						}
+						leftOn = !leftOn
+						for i := 1; i <= 8; i++ {
+							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+								fmt.Println(token.Error())
+							}
+						}
+					}
+
+					if cf.ID == 0x102 && cf.Data[0] == 0x1 && cf.Data[1] == 0x1 {
+						send := `{"state": "on"}`
+						if rightOn {
+							send = `{"state": "off"}`
+						}
+						rightOn = !rightOn
+						for i := 9; i <= 16; i++ {
+							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+								fmt.Println(token.Error())
+							}
+						}
+					}
+				}
+			}
+		}
+	}()
+
 	if token := client.Subscribe("zigbee2mqtt/0x00158d00033e1514", 0, func(client mqtt.Client, msg mqtt.Message) {
 		b := new(ButtonAqara)
 		if err := json.Unmarshal(msg.Payload(), b); err != nil {
