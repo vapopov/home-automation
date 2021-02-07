@@ -25,6 +25,14 @@ type Button struct {
 	Linkquality int    `json:"linkquality"`
 }
 
+type ButtonAqara struct {
+	Action      string `json:"action"`
+	Battery     int    `json:"battery"`
+	Click       string `json:"click"`
+	Linkquality int    `json:"linkquality"`
+	Voltage     int    `json:"voltage"`
+}
+
 type Light struct {
 	State string `json:"state"`
 }
@@ -74,8 +82,8 @@ func main() {
 	}
 
 	fmt.Println("Sample Subscriber Started")
-
-	mHandler := func(c mqtt.Client, msg mqtt.Message) {
+	
+	if token := client.Subscribe("zigbee2mqtt/0x00124b000cc8e2ff", 0, func(c mqtt.Client, msg mqtt.Message) {
 		b := new(Button)
 		if err := json.Unmarshal(msg.Payload(), b); err != nil {
 			fmt.Println(err)
@@ -96,6 +104,10 @@ func main() {
 				Mask: 0xff,
 				On:   true,
 			}
+			regChan2 <- RegChange{
+				Mask: 0xff,
+				On:   true,
+			}
 
 		case "button_2_click":
 			cf.Data = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
@@ -103,6 +115,10 @@ func main() {
 				fmt.Println(err)
 			}
 			regChan1 <- RegChange{
+				Mask: 0xff,
+				On:   false,
+			}
+			regChan2  <- RegChange{
 				Mask: 0xff,
 				On:   false,
 			}
@@ -118,9 +134,71 @@ func main() {
 				fmt.Println(err)
 			}
 		}
+	}); token.Wait() && token.Error() != nil {
+		fmt.Println(token.Error())
+		os.Exit(1)
 	}
 
-	if token := client.Subscribe("zigbee2mqtt/0x00124b000cc8e2ff", 0, mHandler); token.Wait() && token.Error() != nil {
+	// Aquara button hardcoded behaviour.
+	var leftOn, rightOn bool
+	if token := client.Subscribe("zigbee2mqtt/0x00158d00033e1514", 0, func(client mqtt.Client, msg mqtt.Message) {
+		b := new(ButtonAqara)
+		if err := json.Unmarshal(msg.Payload(), b); err != nil {
+			fmt.Println(err)
+			return
+		}
+		switch b.Action {
+		case "single_left":
+			send := `{"state": "on"}`
+			if leftOn {
+				send = `{"state": "off"}`
+			}
+			leftOn = !leftOn
+			for i := 1; i <= 8; i++ {
+				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+					fmt.Println(token.Error())
+				}
+			}
+		case "single_right":
+			send := `{"state": "on"}`
+			if rightOn {
+				send = `{"state": "off"}`
+			}
+			rightOn = !rightOn
+			for i := 9; i <= 16; i++ {
+				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+					fmt.Println(token.Error())
+				}
+			}
+		case "single_both":
+			send := `{"state": "on"}`
+			if leftOn {
+				send = `{"state": "off"}`
+			}
+			leftOn = !leftOn
+			for i := 1; i <= 8; i++ {
+				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+					fmt.Println(token.Error())
+				}
+			}
+			send = `{"state": "on"}`
+			if rightOn {
+				send = `{"state": "off"}`
+			}
+			rightOn = !rightOn
+			for i := 9; i <= 16; i++ {
+				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+					fmt.Println(token.Error())
+				}
+			}
+		case "double_left":
+		case "double_right":
+		case "hold_left":
+		case "hold_right":
+		case "hold_both":
+		case "double_both":
+		}
+	}); token.Wait() && token.Error() != nil {
 		fmt.Println(token.Error())
 		os.Exit(1)
 	}
@@ -133,6 +211,24 @@ func main() {
 	subscribeLight(client, regChan1, "home/light6", 1 << 5)
 	subscribeLight(client, regChan1, "home/light7", 1 << 6)
 	subscribeLight(client, regChan1, "home/light8", 1 << 7)
+
+	subscribeLight(client, regChan2, "home/light9", 1)
+	subscribeLight(client, regChan2, "home/light10", 1 << 1)
+	subscribeLight(client, regChan2, "home/light11", 1 << 2)
+	subscribeLight(client, regChan2, "home/light12", 1 << 3)
+	subscribeLight(client, regChan2, "home/light13", 1 << 4)
+	subscribeLight(client, regChan2, "home/light14", 1 << 5)
+	subscribeLight(client, regChan2, "home/light15", 1 << 6)
+	subscribeLight(client, regChan2, "home/light16", 1 << 7)
+
+	subscribeLight(client, regChan3, "home/light17", 1)
+	subscribeLight(client, regChan3, "home/light18", 1 << 1)
+	subscribeLight(client, regChan3, "home/light19", 1 << 2)
+	subscribeLight(client, regChan3, "home/light20", 1 << 3)
+	subscribeLight(client, regChan3, "home/light21", 1 << 4)
+	subscribeLight(client, regChan3, "home/light22", 1 << 5)
+	subscribeLight(client, regChan3, "home/light23", 1 << 6)
+	subscribeLight(client, regChan3, "home/light24", 1 << 7)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
