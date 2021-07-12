@@ -19,7 +19,7 @@ byte pong[2] = {0xfe, 0x00};
 
 long unsigned int rxId;
 unsigned char len = 0;
-unsigned char rxBuf[2];
+unsigned char rxBuf[8];
 
 /**
  * To verify connection to the chip:
@@ -256,16 +256,14 @@ void loop()
        pong[1]++;
     } else {
        if(rxBuf[0] == 0x3) {
-          if(rxBuf[1] == 0) {
-            digitalWrite(PIN_RELAY, false);
-          } else {
-            digitalWrite(PIN_RELAY, true);
-          }
-          analogWrite(PWM_LED, rxBuf[1]);
+          pwmVal = rxBuf[1];
+          analogWrite(PWM_LED, pwmVal);
        } else if(rxBuf[0] == 0x4) {
           func = &fadeInOut;
           OCR1A = rxBuf[1] << 8 | rxBuf[2]; // step
           TIMSK1 ^= B00000010;    //Toggle OCIE1A bit for enable/disable interrupt
+          pwmVal = 0;
+          analogWrite(PWM_LED, pwmVal);
        } else if(rxBuf[0] == 0x5) {
           pwmValFrom = rxBuf[1]; // from
           pwmValTo = rxBuf[2]; // to
@@ -274,9 +272,14 @@ void loop()
           func = &fadeTo;
           TIMSK1 |= B00000010;    //Set OCIE1A enable interrupt
        }
+
+       if(pwmVal == 0) {
+         digitalWrite(PIN_RELAY, false);
+       } else {
+         digitalWrite(PIN_RELAY, true);
+       }
     }
   }
-  
 }
 
 /*********************************************************************************************************
