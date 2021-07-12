@@ -1,6 +1,5 @@
 package main
 
-
 import (
 	"context"
 	"encoding/json"
@@ -10,7 +9,6 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/brendoncarroll/go-can"
 	"github.com/d2r2/go-i2c"
 	"github.com/eclipse/paho.mqtt.golang"
 )
@@ -51,6 +49,14 @@ var (
 	regChan3  = make(chan RegChange)
 )
 
+func leftOn() bool {
+	return regState1 > 0
+}
+
+func rightOn() bool {
+	return regState2 > 0
+}
+
 func main() {
 	mqtt.ERROR = log.New(os.Stdout, "[ERROR] ", 0)
 	mqtt.CRITICAL = log.New(os.Stdout, "[CRIT] ", 0)
@@ -84,7 +90,6 @@ func main() {
 	fmt.Println("Sample Subscriber Started")
 
 	// Aquara button hardcoded behaviour.
-	var leftOn, rightOn bool
 
 	go func() {
 		for {
@@ -96,10 +101,9 @@ func main() {
 				if err := bus.Read(&cf); err == nil {
 					if cf.ID == 0x102 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1 {
 						send := `{"state": "on"}`
-						if leftOn {
+						if leftOn() {
 							send = `{"state": "off"}`
 						}
-						leftOn = !leftOn
 						for i := 1; i <= 8; i++ {
 							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 								fmt.Println(token.Error())
@@ -109,11 +113,22 @@ func main() {
 
 					if cf.ID == 0x102 && cf.Data[0] == 0x1 && cf.Data[1] == 0x1 {
 						send := `{"state": "on"}`
-						if rightOn {
+						if rightOn() {
 							send = `{"state": "off"}`
 						}
-						rightOn = !rightOn
 						for i := 9; i <= 16; i++ {
+							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+								fmt.Println(token.Error())
+							}
+						}
+					}
+
+					if cf.ID == 0x103 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1 {
+						send := `{"state": "on"}`
+						if leftOn() || rightOn() {
+							send = `{"state": "off"}`
+						}
+						for i := 1; i <= 16; i++ {
 							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 								fmt.Println(token.Error())
 							}
@@ -133,10 +148,9 @@ func main() {
 		switch b.Action {
 		case "single_left":
 			send := `{"state": "on"}`
-			if leftOn {
+			if leftOn() {
 				send = `{"state": "off"}`
 			}
-			leftOn = !leftOn
 			for i := 1; i <= 8; i++ {
 				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 					fmt.Println(token.Error())
@@ -144,10 +158,9 @@ func main() {
 			}
 		case "single_right":
 			send := `{"state": "on"}`
-			if rightOn {
+			if rightOn() {
 				send = `{"state": "off"}`
 			}
-			rightOn = !rightOn
 			for i := 9; i <= 16; i++ {
 				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 					fmt.Println(token.Error())
@@ -155,20 +168,18 @@ func main() {
 			}
 		case "single_both":
 			send := `{"state": "on"}`
-			if leftOn {
+			if leftOn() {
 				send = `{"state": "off"}`
 			}
-			leftOn = !leftOn
 			for i := 1; i <= 8; i++ {
 				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 					fmt.Println(token.Error())
 				}
 			}
 			send = `{"state": "on"}`
-			if rightOn {
+			if rightOn() {
 				send = `{"state": "off"}`
 			}
-			rightOn = !rightOn
 			for i := 9; i <= 16; i++ {
 				if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 					fmt.Println(token.Error())
