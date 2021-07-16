@@ -6,19 +6,24 @@
 #include <OneButton.h>
 
 #include <OneWire.h> 
-// #include <DallasTemperature.h>
 
+#define DEVICE_ADDR     0x104
+#define CAN_FILTER_MASK 0x010F0000
+#define CAN_FILTER      0x01040000
 
 MCP_CAN CAN0(10);     // Set CS to pin 10
 #define CAN0_INT 9    // Set INT to pin 9
 
-#define DEVICE_ADDR 0x104
-
+#define ONE_WIRE_BUS 2 
 #define PWM_LED 3
-#define PIN_RELAY 8
+#define PIN_LED_RELAY 8
+#define PIN_HEATER_RELAY 7
+#define BUTTON_ZERO 4
+#define BUTTON_ONE 5
 
 byte data[8] = {0x00, 0x00};
-byte pong[4] = {0xfe, 0x00, 0x00, 0x00};
+//             -addr--inc-  -temp-----  -set temp-  -gap-
+byte pong[7] = {0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 long unsigned int rxId;
 unsigned char len = 0;
@@ -29,17 +34,10 @@ const int TEMP_UPDATE_TIME = 1000; // Period in ms for checking temperature.
 
 
 /********************************************************************/
-// Data wire is plugged into pin 2 on the Arduino 
-#define ONE_WIRE_BUS 2 
-/********************************************************************/
 // Setup a oneWire instance to communicate with any OneWire devices  
 // (not just Maxim/Dallas temperature ICs) 
 OneWire ds(ONE_WIRE_BUS); 
 /********************************************************************/
-// Pass our oneWire reference to Dallas Temperature. 
-// DallasTemperature sensors(&oneWire);
-/********************************************************************/ 
-
 
 /**
  * To verify connection to the chip:
@@ -83,13 +81,13 @@ ID in Hex  -   Two Data Bytes!   -  Filter/Mask in HEX
 
 
 OneButton btn0 = OneButton(
-  4,           // Input pin for the button
+  BUTTON_ZERO, // Input pin for the button
   true,        // Button is active LOW
   true         // Enable internal pull-up resistor
 );
 
 OneButton btn1 = OneButton(
-  5,           // Input pin for the button
+  BUTTON_ONE,  // Input pin for the button
   true,        // Button is active LOW
   true         // Enable internal pull-up resistor
 );
@@ -108,21 +106,22 @@ void setup()
   if(CAN0.begin(MCP_STD, CAN_125KBPS, MCP_8MHZ) == CAN_OK) Serial.println("MCP2515 Initialized Successfully!");
   else Serial.println("Error Initializing MCP2515...");
 
-  CAN0.init_Mask(0,0,0x010F0000);                // Init first mask...
-  CAN0.init_Filt(0,0,0x01040000);                // Init second filter...
-  CAN0.init_Filt(1,0,0x01040000);                // Init second filter...
+  CAN0.init_Mask(0,0,CAN_FILTER_MASK);           // Init first mask...
+  CAN0.init_Filt(0,0,CAN_FILTER);                // Init second filter...
+  CAN0.init_Filt(1,0,CAN_FILTER);                // Init second filter...
 
-  CAN0.init_Mask(1,0,0x010F0000);
-  CAN0.init_Filt(2,0,0x01040000);
-  CAN0.init_Filt(3,0,0x01040000);
-  CAN0.init_Filt(4,0,0x01040000);
-  CAN0.init_Filt(5,0,0x01040000);
+  CAN0.init_Mask(1,0,CAN_FILTER_MASK);
+  CAN0.init_Filt(2,0,CAN_FILTER);
+  CAN0.init_Filt(3,0,CAN_FILTER);
+  CAN0.init_Filt(4,0,CAN_FILTER);
+  CAN0.init_Filt(5,0,CAN_FILTER);
 
   CAN0.setMode(MCP_NORMAL);   // Change to normal mode to allow messages to be transmitted
 
   pinMode(CAN0_INT, INPUT);
   pinMode(PWM_LED, OUTPUT);
-  pinMode(PIN_RELAY, OUTPUT);
+  pinMode(PIN_LED_RELAY, OUTPUT);
+  pinMode(PIN_HEATER_RELAY, OUTPUT);
 
   // ------------------------------ Set Timers -------------------------------------
   cli();
@@ -130,8 +129,8 @@ void setup()
   TCCR1B = 0;             //Reset entire TCCR1B register
   TCCR1B |= B00000100;    //Set CS12 to 1 so we get Prescalar = 256
   TCNT1 = 0;              //Reset Timer 1 value to 0
-  // TIMSK1 |= B00000010;    //Set OCIE1A to 1 so we enable compare match A 
-  OCR1A = 312;           //Finally we set compare register A to this value ~ 50ms
+  // TIMSK1 |= B00000010; //Set OCIE1A to 1 so we enable compare match A 
+  OCR1A = 312;            //Finally we set compare register A to this value ~ 5ms
   sei();
 
   // -------------------------------------------------------------------------------
@@ -258,6 +257,10 @@ ISR(TIMER1_COMPA_vect) {
   func();
 }
 
+int temperature = 0;    // Current temperature from device.
+int setTemperature = 0; // Temperature goal set for the heater.
+int tempGap = 0;        // Temperature gap when heater must be enabled again.
+
 int detectTemperature() {
   ds.reset();
   ds.write(0xCC);
@@ -271,6 +274,8 @@ int detectTemperature() {
     ds.write(0xBE);
     pong[3] = ds.read();
     pong[2] = ds.read();
+
+    temperature = (pong[2] << 8) + pong[3];
   }
 }
 
@@ -285,39 +290,53 @@ void loop()
   // 0x1a0 * 0.0625 
   detectTemperature();
 
+  // If the temperature sensor is not responding we have to always turn of the heater.
+  if(temperature == 0 || temperature >= setTemperature) {
+    digitalWrite(PIN_HEATER_RELAY, false);
+  } else if(temperature < setTemperature - tempGap) {
+    digitalWrite(PIN_HEATER_RELAY, true);
+  }
+
   if(!digitalRead(CAN0_INT)) {
     CAN0.readMsgBuf(&rxId, &len, rxBuf);      // Read data: len = data length, buf = data byte(s)
     // (rxId & DEVICE_ADDR) == DEVICE_ADDR)
     if((rxId & 0x40000000) == 0x40000000) {
       // Determine if message is a remote request frame.
-       CAN0.sendMsgBuf(DEVICE_ADDR, 0, 4,  pong);
+       CAN0.sendMsgBuf(DEVICE_ADDR, 0, 7,  pong);
        pong[1]++;
     } else {
        if(rxBuf[0] == 0x3) {
-          TIMSK1 &= ~B00000010;    //Set OCIE1A disable interrupt  
+          TIMSK1 &= ~B00000010;             //Set OCIE1A disable interrupt  
           pwmVal = rxBuf[1];
           analogWrite(PWM_LED, pwmVal);
        } else if(rxBuf[0] == 0x4) {
           func = &fadeInOut;
-          pwmValFrom = rxBuf[1]; // from
-          pwmValTo = rxBuf[2]; // to
+          pwmValFrom = rxBuf[1];            // from
+          pwmValTo = rxBuf[2];              // to
           OCR1A = rxBuf[3] << 8 | rxBuf[4]; // step
           pwmVal = pwmValFrom;
-          TIMSK1 |= B00000010;    //Set OCIE1A enable interrupt
+          TIMSK1 |= B00000010;              //Set OCIE1A enable interrupt
           analogWrite(PWM_LED, pwmVal);
        } else if(rxBuf[0] == 0x5) {
           func = &fadeTo;
-          pwmValFrom = rxBuf[1]; // from
-          pwmValTo = rxBuf[2]; // to
+          pwmValFrom = rxBuf[1];            // from
+          pwmValTo = rxBuf[2];              // to
           OCR1A = rxBuf[3] << 8 | rxBuf[4]; // step
           pwmVal = pwmValFrom;
-          TIMSK1 |= B00000010;    //Set OCIE1A enable interrupt
+          TIMSK1 |= B00000010;              //Set OCIE1A enable interrupt
+       } else if(rxBuf[0] == 0xf) {
+          pong[4] = rxBuf[1];
+          pong[5] = rxBuf[2];
+          pong[6] = rxBuf[3];
+
+          setTemperature = (rxBuf[1] << 8) + rxBuf[2];
+          tempGap = rxBuf[3];
        }
 
        if(pwmVal == 0) {
-         digitalWrite(PIN_RELAY, false);
+         digitalWrite(PIN_LED_RELAY, false);
        } else {
-         digitalWrite(PIN_RELAY, true);
+         digitalWrite(PIN_LED_RELAY, true);
        }
     }
   }
