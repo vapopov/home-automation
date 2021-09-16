@@ -7,9 +7,9 @@
 
 #include <OneWire.h> 
 
-#define DEVICE_ADDR     0x104
+#define DEVICE_ADDR     0x106
 #define CAN_FILTER_MASK 0x010F0000
-#define CAN_FILTER      0x01040000
+#define CAN_FILTER      0x01060000
 
 MCP_CAN CAN0(10);     // Set CS to pin 10
 #define CAN0_INT 9    // Set INT to pin 9
@@ -20,6 +20,10 @@ MCP_CAN CAN0(10);     // Set CS to pin 10
 #define PIN_HEATER_RELAY 7
 #define BUTTON_ZERO 4
 #define BUTTON_ONE 5
+
+// To active CLK0 output from avr ************
+// avrdude -c usbasp -p m328p -U lfuse:w:0xB7:m
+// http://eleccelerator.com/fusecalc/fusecalc.php?chip=atmega328p&LOW=B7&HIGH=DA&EXTENDED=FD&LOCKBIT=FF  
 
 byte data[8] = {0x00, 0x00};
 //             -addr--inc-  -temp-----  -set temp-  -gap-
@@ -42,9 +46,6 @@ OneWire ds(ONE_WIRE_BUS);
 /**
  * To verify connection to the chip:
  * avrdude -c usbasp -p m328p
- * 
- * Four pins 10(SS), 11(MOSI), 12(MISO), and 13(SCK) are used for this purpose, 9 (INT), 10 (CS)
- * orange(11-MOSI), yellow (12-MISO), green (13-SCK), blue (RESET)
  */
 
 /***********************************************************************************
@@ -103,7 +104,7 @@ void setup()
   Serial.begin(115200);
 
   // Initialize MCP2515 running at 8MHz with a baudrate of 125kb/s and the masks and filters disabled.
-  if(CAN0.begin(MCP_STD, CAN_125KBPS, MCP_8MHZ) == CAN_OK) Serial.println("MCP2515 Initialized Successfully!");
+  if(CAN0.begin(MCP_STD, CAN_125KBPS, MCP_16MHZ) == CAN_OK) Serial.println("MCP2515 Initialized Successfully!");
   else Serial.println("Error Initializing MCP2515...");
 
   CAN0.init_Mask(0,0,CAN_FILTER_MASK);           // Init first mask...
@@ -288,14 +289,14 @@ void loop()
   //btn2.tick();
 
   // 0x1a0 * 0.0625 
-  detectTemperature();
-
-  // If the temperature sensor is not responding we have to always turn of the heater.
-  if(temperature == 0 || temperature >= setTemperature) {
-    digitalWrite(PIN_HEATER_RELAY, false);
-  } else if(temperature < setTemperature - tempGap) {
-    digitalWrite(PIN_HEATER_RELAY, true);
-  }
+//  detectTemperature();
+//
+//  // If the temperature sensor is not responding we have to always turn of the heater.
+//  if(temperature == 0 || temperature >= setTemperature) {
+//    digitalWrite(PIN_HEATER_RELAY, false);
+//  } else if(temperature < setTemperature - tempGap) {
+//    digitalWrite(PIN_HEATER_RELAY, true);
+//  }
 
   if(!digitalRead(CAN0_INT)) {
     CAN0.readMsgBuf(&rxId, &len, rxBuf);      // Read data: len = data length, buf = data byte(s)
@@ -325,9 +326,9 @@ void loop()
           pwmVal = pwmValFrom;
           TIMSK1 |= B00000010;              //Set OCIE1A enable interrupt
        } else if(rxBuf[0] == 0xf) {
-          pong[4] = rxBuf[1];
-          pong[5] = rxBuf[2];
-          pong[6] = rxBuf[3];
+          pong[4] = rxBuf[1];               // temperature H
+          pong[5] = rxBuf[2];               // temperature L
+          pong[6] = rxBuf[3];               // temperature gap
 
           setTemperature = (rxBuf[1] << 8) + rxBuf[2];
           tempGap = rxBuf[3];
