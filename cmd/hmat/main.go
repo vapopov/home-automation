@@ -123,7 +123,7 @@ func main() {
 						}
 					}
 
-					if cf.ID == 0x103 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1 {
+					if (cf.ID == 0x103 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1) || (cf.ID == 0x101 && cf.Data[0] == 0x0 && cf.Data[1] == 0x1) {
 						send := `{"state": "on"}`
 						if leftOn() || rightOn() {
 							send = `{"state": "off"}`
