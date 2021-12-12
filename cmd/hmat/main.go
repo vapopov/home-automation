@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"time"
 
+	can "github.com/brendoncarroll/go-can"
 	"github.com/d2r2/go-i2c"
 	"github.com/eclipse/paho.mqtt.golang"
 )
@@ -18,10 +19,10 @@ var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 	fmt.Printf("MSG: %s\n", msg.Payload())
 }
 
-type Button struct {
-	Action      string `json:"action"`
-	Linkquality int    `json:"linkquality"`
-}
+var (
+	canListeners []func(frame can.CANFrame)
+	topicStates  = make(map[string]bool)
+)
 
 type ButtonAqara struct {
 	Action      string `json:"action"`
@@ -89,7 +90,6 @@ func main() {
 
 	fmt.Println("Sample Subscriber Started")
 
-	// Aquara button hardcoded behaviour.
 
 	go func() {
 		for {
@@ -99,41 +99,32 @@ func main() {
 			default:
 				cf := can.CANFrame{}
 				if err := bus.Read(&cf); err == nil {
-					if cf.ID == 0x102 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1 {
-						send := `{"state": "on"}`
-						if leftOn() {
-							send = `{"state": "off"}`
-						}
-						for i := 1; i <= 8; i++ {
-							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
-								fmt.Println(token.Error())
-							}
-						}
+					for _, listener := range canListeners {
+						listener(cf)
 					}
-
-					if cf.ID == 0x102 && cf.Data[0] == 0x1 && cf.Data[1] == 0x1 {
-						send := `{"state": "on"}`
-						if rightOn() {
-							send = `{"state": "off"}`
-						}
-						for i := 9; i <= 16; i++ {
-							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
-								fmt.Println(token.Error())
-							}
-						}
-					}
-
-					if (cf.ID == 0x103 && cf.Data[0] == 0x2 && cf.Data[1] == 0x1) || (cf.ID == 0x101 && cf.Data[0] == 0x0 && cf.Data[1] == 0x1) {
-						send := `{"state": "on"}`
-						if leftOn() || rightOn() {
-							send = `{"state": "off"}`
+					if cf.ID == 0x1ac {
+						send := `{"state": "off"}`
+						if cf.Data[1] > 0 {
+							send = `{"state": "on"}`
 						}
 						for i := 1; i <= 16; i++ {
-							if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+							if token := client.Publish(fmt.Sprintf("home/light%d", cf.Data[0]), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
 								fmt.Println(token.Error())
 							}
 						}
 					}
+
+					//if cf.ID == 0x101 && cf.Data[0] == 0x0 && cf.Data[1] == 0x1 {
+					//	send := `{"state": "on"}`
+					//	if leftOn() || rightOn() {
+					//		send = `{"state": "off"}`
+					//	}
+					//	for i := 1; i <= 16; i++ {
+					//		if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+					//			fmt.Println(token.Error())
+					//		}
+					//	}
+					//}
 				}
 			}
 		}
@@ -224,10 +215,85 @@ func main() {
 	subscribeLight(client, regChan3, "home/light23", 1 << 6)
 	subscribeLight(client, regChan3, "home/light24", 1 << 7)
 
+	canListeners = []func(frame can.CANFrame) {
+		subCanFrameSwitcherOnOffAll(client, []string{
+			"home/light1", "home/light2", "home/light3", "home/light4",
+			"home/light5", "home/light6", "home/light7", "home/light8",
+			"home/light9", "home/light12",
+			"home/light13", "home/light14", "home/light15", "home/light16",
+		}, 0x101, []byte{0x00, 0x01}),
+
+		subCanFrameSwitcherOnOff(client, []string{"home/light8"}, 0x112, []byte{0x01, 0x01}),  // bathroom master bedroom light
+
+		subCanFrameSwitcherOnOff(client, []string{"home/led_mb_toilet"}, 0x112, []byte{0x00, 0x01}),  // bathroom master bedroom light
+		subCanFrameSwitcherOnOff(client, []string{"home/light11"}, 0x112, []byte{0x00, 0x02}), // bathroom master bedroom vents
+	}
+
+	subscribeLedStrips(client, bus, "home/led_mb_toilet", 0x112, []byte{0x04, 0x10, 0x90, 0x04, 0xf0}, []byte{0x03, 0x00})
+
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
 	<-c
+}
+
+func subCanFrameSwitcherOnOff(client mqtt.Client, topics []string, id uint32, dataSet ...[]byte) func(frame can.CANFrame) {
+	return func(frame can.CANFrame) {
+		if id != frame.ID {
+			return
+		}
+		for _, data := range dataSet {
+			matched := true
+			for i, d := range data {
+				if d != frame.Data[i] {
+					matched = false
+				}
+			}
+			if matched {
+				for _, topic := range topics {
+					send := `{"state": "on"}`
+					if state, ok := topicStates[topic]; ok && state {
+						send = `{"state": "off"}`
+					}
+
+					if token := client.Publish(topic, 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+						fmt.Println(token.Error())
+					}
+				}
+			}
+		}
+	}
+}
+
+func subCanFrameSwitcherOnOffAll(client mqtt.Client, topics []string, id uint32, dataSet ...[]byte) func(frame can.CANFrame) {
+	return func(frame can.CANFrame) {
+		if id != frame.ID {
+			return
+		}
+		for _, data := range dataSet {
+			matched := true
+			for i, d := range data {
+				if d != frame.Data[i] {
+					matched = false
+				}
+			}
+			if matched {
+				send := `{"state": "on"}`
+				for _, topic := range topics {
+					if state, ok := topicStates[topic]; ok && state {
+						send = `{"state": "off"}`
+						break
+					}
+				}
+				for _, topic := range topics {
+					if token := client.Publish(topic, 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+						fmt.Println(token.Error())
+					}
+				}
+			}
+		}
+	}
 }
 
 func spawnRegistry(ctx context.Context, addr uint8, regChan <-chan RegChange, regState *uint16) {
@@ -260,25 +326,78 @@ func spawnRegistry(ctx context.Context, addr uint8, regChan <-chan RegChange, re
 
 func subscribeLight(client mqtt.Client, regChan chan<- RegChange, topic string, mask uint16) {
 	if token := client.Subscribe(topic, 0, func(c mqtt.Client, msg mqtt.Message) {
-		l := new(Light)
-		if err := json.Unmarshal(msg.Payload(), l); err != nil {
+		light := new(Light)
+		if err := json.Unmarshal(msg.Payload(), light); err != nil {
 			fmt.Println(err)
 			return
 		}
 
-		switch l.State {
+		switch light.State {
 		case "on":
 			regChan <- RegChange{
 				On:   true,
 				Mask: mask,
 			}
+			topicStates[topic] = true
 		case "off":
 			regChan <- RegChange{
 				On:   false,
 				Mask: mask,
 			}
+			topicStates[topic] = false
+		}
+
+	}); token.Wait() && token.Error() != nil {
+		log.Fatal(token.Error())
+	}
+}
+
+func subscribeLedStrips(client mqtt.Client, bus *can.CANBus, topic string, id uint32, dataOn []byte, dataOff []byte) {
+	if token := client.Subscribe(topic, 0, func(c mqtt.Client, msg mqtt.Message) {
+		light := new(Light)
+		if err := json.Unmarshal(msg.Payload(), light); err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		switch light.State {
+		case "on":
+			fr := &can.CANFrame{ID: id, Len: uint32(len(dataOn))}
+			copy(fr.Data[:], dataOn)
+			_ = bus.Write(fr)
+			topicStates[topic] = true
+		case "off":
+			fr := &can.CANFrame{ID: id, Len: uint32(len(dataOff))}
+			copy(fr.Data[:], dataOff)
+			_ = bus.Write(fr)
+			topicStates[topic] = false
 		}
 	}); token.Wait() && token.Error() != nil {
 		log.Fatal(token.Error())
 	}
 }
+
+// 1 - lodzhiya
+// 2 - bra in kitchen ??
+// 3 - ???
+// 4 - cabinet under table
+// 5 - ????
+// 6 - warderobe cabinet
+// 7 - master bedroom tunnel enterance
+// 8 - toilet
+// 9 - ????
+// 10 - vityazka toilet guests
+// 11 - vityazka toilet master bedroom
+// 12 - server room, washing room
+// 13 - toilet guests
+// 14 - kitchen
+// 15 - vhod
+// 16 - kitchen near tracks
+// 17 empty
+// 18 empty
+// 19 empty
+// 20 empty
+// 21 - ?????
+// 22 - ?????
+// 23 - ?????
+// 24 - vityazka server room
