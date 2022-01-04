@@ -107,24 +107,11 @@ func main() {
 						if cf.Data[1] > 0 {
 							send = `{"state": "on"}`
 						}
-						for i := 1; i <= 16; i++ {
-							if token := client.Publish(fmt.Sprintf("home/light%d", cf.Data[0]), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
-								fmt.Println(token.Error())
-							}
+
+						if token := client.Publish(fmt.Sprintf("home/light%d", cf.Data[0]), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
+							fmt.Println(token.Error())
 						}
 					}
-
-					//if cf.ID == 0x101 && cf.Data[0] == 0x0 && cf.Data[1] == 0x1 {
-					//	send := `{"state": "on"}`
-					//	if leftOn() || rightOn() {
-					//		send = `{"state": "off"}`
-					//	}
-					//	for i := 1; i <= 16; i++ {
-					//		if token := client.Publish(fmt.Sprintf("home/light%d", i), 0, false, []byte(send)); token.Wait() && token.Error() != nil {
-					//			fmt.Println(token.Error())
-					//		}
-					//	}
-					//}
 				}
 			}
 		}
@@ -384,7 +371,7 @@ func subscribeLedStrips(client mqtt.Client, bus *can.CANBus, topic string, id ui
 // 5 - ????
 // 6 - warderobe cabinet
 // 7 - master bedroom tunnel enterance
-// 8 - toilet
+// 8 - master bedroom toilet
 // 9 - ????
 // 10 - vityazka toilet guests
 // 11 - vityazka toilet master bedroom

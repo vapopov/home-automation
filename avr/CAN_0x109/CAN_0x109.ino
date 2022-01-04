@@ -4,11 +4,12 @@
 #include <mcp_can.h>
 #include <SPI.h>
 #include <OneButton.h>
+#include <WS2812FX.h>
 
 
-#define DEVICE_ADDR      0x102
+#define DEVICE_ADDR      0x109
 #define CAN_FILTER_MASK 0x010F0000
-#define CAN_FILTER      0x01020000
+#define CAN_FILTER      0x01090000
 
 MCP_CAN CAN0(10);     // Set CS to pin 10
 #define CAN0_INT 9    // Set INT to pin 9
@@ -16,10 +17,15 @@ MCP_CAN CAN0(10);     // Set CS to pin 10
 #define PWM_LED 3 // PD3, OC2B
 #define PIN_LED_RELAY 6
 
-#define PIN_WATER 7
-
 #define BUTTON_ZERO 4
 #define BUTTON_ONE 5
+
+
+// Set the pin led strip.
+#define LED_COUNT 300
+#define LED_PIN 7
+
+WS2812FX ws2812fx = WS2812FX(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // To active CLK0 output from avr ************
 // avrdude -c usbasp -p m328p -U lfuse:w:0xB7:m
@@ -56,9 +62,6 @@ OneButton btn1 = OneButton(
 
 void setup()
 {
-  Serial.begin(9600, SERIAL_8N1);
-  Serial.setTimeout(2000);
-
   CAN0.begin(MCP_STD, CAN_125KBPS, MCP_16MHZ);
 
   CAN0.init_Mask(0,0,CAN_FILTER_MASK);           // Init first mask...
@@ -76,8 +79,7 @@ void setup()
   pinMode(CAN0_INT, INPUT);
   pinMode(PWM_LED, OUTPUT);
   pinMode(PIN_LED_RELAY, OUTPUT);
-  pinMode(PIN_WATER, OUTPUT);
-
+  pinMode(LED_PIN, OUTPUT);
 
   // ------------------------------ Set Timers -------------------------------------
   cli();
@@ -107,6 +109,8 @@ void setup()
   sei();
 
   // -------------------------------------------------------------------------------
+
+  ws2812fx.init();
 
   // Single Click event attachment
   btn0.attachClick([]() {
@@ -204,90 +208,16 @@ ISR(TIMER1_COMPA_vect) {
 }
 
 
-const byte CUR200_ON     = 1;
-const byte CUR200_OFF    = 1 << 1;
-const byte CUR200_NOERTH = 1 << 2;
-const byte ASYN_CHRG     = 1 << 3;
-const byte AKB_CHRG      = 1 << 4;
-const byte AKB_NO_CHRG   = 1 << 5;
-const byte AKB_UNDER_CUR = 1 << 6;
-
-
-byte upsResp[16];
-void checkUPS() 
-{
-  byte const req[] = {0x55, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x56};
-  Serial.write(req, 13);
-  if (Serial.available() > 0) {
-      //Serial.readBytes(upsResp, 13); // since tx connected to rx, we have to read same message.
-      Serial.find(0x56);
-      Serial.readBytes(upsResp, 16);
-  }
-
-  byte crc = 0;
-  for(uint8_t i = 0; i < 15; i++) {
-    crc += upsResp[i];
-  }
-
-  //if (crc == upsResp[15]) {
-    // Set voltage data.
-    pong[2] = upsResp[2];
-    pong[3] = upsResp[3];
-    // Set current data.
-    pong[4] = upsResp[4];
-    pong[5] = upsResp[5];
-    // Set the flags.
-    pong[6] = 0;
-    if (upsResp[6] == 0) {
-      pong[6] |= CUR200_OFF;
-    } else if (upsResp[6] == 1) {
-      pong[6] |= CUR200_ON;
-    } else if (upsResp[6] == 2) {
-      pong[6] |= CUR200_NOERTH;
-    }
-
-    if (upsResp[7] == 1) {
-      pong[6] |= ASYN_CHRG;
-    }
-
-    if (upsResp[8] == 0) {
-      pong[6] |= AKB_NO_CHRG;
-    } else if (upsResp[8] == 1) {
-      pong[6] |= AKB_CHRG;
-    } else if (upsResp[8] == 2) {
-      pong[6] |= AKB_UNDER_CUR;
-    }
-//  } else {
-//    pong[2] = 0;
-//    pong[3] = 0;
-//    pong[4] = 0;
-//    pong[5] = 0;
-//    pong[6] = 0;
-//  }
-}
-
-bool checkUPSEnabled = false;
-
 // ----------------------------------------- Main Loop --------------------------------------------
 void loop()
 {
   btn0.tick();
   btn1.tick();
+  ws2812fx.service();
 
   if(!digitalRead(CAN0_INT)) {
     CAN0.readMsgBuf(&rxId, &len, rxBuf);      // Read data: len = data length, buf = data byte(s)
-    // (rxId & DEVICE_ADDR) == DEVICE_ADDR)
     if((rxId & 0x40000000) == 0x40000000) {
-      if (checkUPSEnabled) {
-        checkUPS();
-      } else {
-        pong[2] = 0;
-        pong[3] = 0;
-        pong[4] = 0;
-        pong[5] = 0;
-        pong[6] = 0;
-      }
-      // Determine if message is a remote request frame.
        CAN0.sendMsgBuf(DEVICE_ADDR, 0, 7,  pong);
        pong[1]++;
     } else {
@@ -310,18 +240,14 @@ void loop()
           OCR1A = rxBuf[3] << 8 | rxBuf[4]; // step
           pwmVal = pwmValFrom;
           TIMSK1 |= B00000010;              //Set OCIE1A enable interrupt
-       } else if(rxBuf[0] == 0x6) { /// digital writing for output, need for closing water 
-          pwmValFrom = rxBuf[1];            // from
-          if (rxBuf[1] == 0) {
-            digitalWrite(PIN_WATER, false);
+       } else if(rxBuf[0] == 0x6) { // controll rgb strip
+          if(rxBuf[1] == 0x0) {
+            ws2812fx.stop();
           } else {
-            digitalWrite(PIN_WATER, true);
-          }    
-       } else if (rxBuf[0] = 0x1a) {
-          if (rxBuf[1] > 0) {
-            checkUPSEnabled = true;
-          } else {
-            checkUPSEnabled = false;
+            ws2812fx.setBrightness(rxBuf[2]);
+            ws2812fx.setSpeed(rxBuf[3]);
+            ws2812fx.setMode(rxBuf[4]);
+            ws2812fx.start();
           }
        }
 
