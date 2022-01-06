@@ -4,8 +4,6 @@
 #include <mcp_can.h>
 #include <SPI.h>
 #include <OneButton.h>
-#include <WS2812FX.h>
-
 
 #define DEVICE_ADDR      0x109
 #define CAN_FILTER_MASK 0x010F0000
@@ -16,16 +14,11 @@ MCP_CAN CAN0(10);     // Set CS to pin 10
 
 #define PWM_LED 3 // PD3, OC2B
 #define PIN_LED_RELAY 6
+#define PIN_LED_RELAY2 7
 
 #define BUTTON_ZERO 4
 #define BUTTON_ONE 5
 
-
-// Set the pin led strip.
-#define LED_COUNT 300
-#define LED_PIN 7
-
-WS2812FX ws2812fx = WS2812FX(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // To active CLK0 output from avr ************
 // avrdude -c usbasp -p m328p -U lfuse:w:0xB7:m
@@ -38,7 +31,6 @@ byte pong[7] = {0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 long unsigned int rxId;
 unsigned char len = 0;
 unsigned char rxBuf[8];
-
 
 /********************************************************************/
 
@@ -79,8 +71,8 @@ void setup()
   pinMode(CAN0_INT, INPUT);
   pinMode(PWM_LED, OUTPUT);
   pinMode(PIN_LED_RELAY, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
-
+  pinMode(PIN_LED_RELAY2, OUTPUT);
+    
   // ------------------------------ Set Timers -------------------------------------
   cli();
   TCCR1A = 0;             //Reset entire TCCR1A register
@@ -91,7 +83,7 @@ void setup()
   OCR1A = 312;            //Finally we set compare register A to this value ~ 5ms
   
   // +++++++++ timer 2 ++++++++++++++++++++
-  /*set fast PWM mode with non-inverted output*/
+  /*set fast PWM mode with non-inverted output*/ // Пины D3 и D11 - 62.5 кГц
   TCCR2A = (0 << WGM02) | (1 << WGM01) | (1 << WGM00);
   // Normal port operation, OC2A disconnected.
   TCCR2A |= (0 << COM2A1) | (0 << COM2A0); 
@@ -99,18 +91,10 @@ void setup()
   TCCR2A |= (0 << COM2B1) | (0 << COM2B0); 
   // B Register +++++++++++++++++++++++++++
   TCCR2B = (0 << CS22) | (0 << CS21) | (1 << CS20); // no prescaller
-
-  // Пины D3 и D11 - 62.5 кГц
-//  TCCR2B = 0b00000001;  // x1
-//  TCCR2A = 0b00000011;  // fast pwm
-//  // Пины D3 и D11 - 31.4 кГц
-//  TCCR2B = 0b00000001;  // x1
-//  TCCR2A = 0b00000001;  // phase correct  
+ 
   sei();
 
   // -------------------------------------------------------------------------------
-
-  ws2812fx.init();
 
   // Single Click event attachment
   btn0.attachClick([]() {
@@ -207,13 +191,11 @@ ISR(TIMER1_COMPA_vect) {
   func();
 }
 
-
 // ----------------------------------------- Main Loop --------------------------------------------
 void loop()
-{
+{   
   btn0.tick();
   btn1.tick();
-  ws2812fx.service();
 
   if(!digitalRead(CAN0_INT)) {
     CAN0.readMsgBuf(&rxId, &len, rxBuf);      // Read data: len = data length, buf = data byte(s)
@@ -240,14 +222,11 @@ void loop()
           OCR1A = rxBuf[3] << 8 | rxBuf[4]; // step
           pwmVal = pwmValFrom;
           TIMSK1 |= B00000010;              //Set OCIE1A enable interrupt
-       } else if(rxBuf[0] == 0x6) { // controll rgb strip
-          if(rxBuf[1] == 0x0) {
-            ws2812fx.stop();
+       } else if(rxBuf[0] == 0x6) {
+          if (rxBuf[1] > 0) {
+            digitalWrite(PIN_LED_RELAY2, true);
           } else {
-            ws2812fx.setBrightness(rxBuf[2]);
-            ws2812fx.setSpeed(rxBuf[3]);
-            ws2812fx.setMode(rxBuf[4]);
-            ws2812fx.start();
+            digitalWrite(PIN_LED_RELAY2, false);
           }
        }
 
@@ -259,6 +238,7 @@ void loop()
     }
   }
 }
+
 
 /*********************************************************************************************************
   END FILE
